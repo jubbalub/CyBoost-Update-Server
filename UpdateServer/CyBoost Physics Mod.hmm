@@ -1,0 +1,433 @@
+Code "CyBoost Physics Mod" in "Extra" by "jubbalub"
+//
+    #include "ReflectionHelpers" noemit
+    #lib "Reflection"
+    #lib "SonicParameters"
+    #lib "Time"
+    #lib "Sonic"
+    #lib "Bitwise"
+    #lib "BlackboardStatus"
+	#lib "BlackboardItem"
+    #lib "HMM"
+    #lib "INI"
+	#lib "Lua"
+
+    #load "System.Numerics.dll"
+    #load "System.Numerics.Vectors.dll"
+    #load "System.Runtime.dll"
+    #load "PresentationCore.dll"
+    #load "PresentationFramework.dll"
+    #load "WindowsBase.dll"
+    #load "System.Windows.Forms.dll"
+
+    using System;
+    using System.Numerics;
+    using System.Collections.Generic;
+    using System.Media;
+    using System.Windows.Media;
+    using System.IO;
+    using System.Windows.Forms;
+	
+	static MediaPlayer sound = new MediaPlayer();
+	
+	static float trailParticleTime = 0.1f;
+	static float burstParticleTime = 0.1f;
+	static float trailParticleTimer = -1.0f;
+	static float burstParticleTimer = -1.0f;
+	static float speed;
+	static float jumpSpeed;
+	static float defaultSpeed = 15.0f;
+	static float halfSpeed = 10.0f;
+	static float zero = 0.0f;
+	static float inputTime = 0.1f;
+	
+	float currentSpeed = Sonic.Kinematics.GetHorizontalMagnitude();
+	
+	Sonic.StateID state = Sonic.State.GetCurrentStateID();
+	
+	static bool canBoost = true;
+	static bool maxMeter = false;
+	
+	static List<Sonic.StateID> BoostStates = new()
+    {
+        Sonic.StateID.StateRun,
+        Sonic.StateID.StateJump,
+		Sonic.StateID.StateAirBoost,
+		Sonic.StateID.StateGrind,
+    };
+	
+	static List<Sonic.StateID> SpinBoostChargeStates = new()
+    {
+        Sonic.StateID.StateSquatRoot,
+        Sonic.StateID.StateSquat,
+		Sonic.StateID.StateStandRoot,
+		Sonic.StateID.StateStand,
+		Sonic.StateID.StateSliding,
+    };
+	
+	static List<Sonic.StateID> GrindStates = new()
+    {
+        Sonic.StateID.StateGrindRoot,
+        Sonic.StateID.StateGrind,
+        Sonic.StateID.StateGrindStep,
+        Sonic.StateID.StateGrindDamage,
+    };
+	
+	long pStatePluginBoost = Sonic.State.GetStatePlugin("StatePluginBoost");
+	
+	const string ModFolderName = "CyBoost Physics Mod";
+	
+	var currentState = Sonic.State.GetCurrentStateID();
+	
+	static string GetModPath() {
+        // Reads the user's current mod profile INI
+        var modsDb = HMM.GetModsDatabase();
+        string modIniPath = string.Empty;
+
+        // Traverses the mod profile INI to find our mod
+        foreach (var entry in modsDb["Mods"])
+        {
+            if (entry.Value.Contains(ModFolderName))
+            {
+                // Found our mod, so store the path to its mod.ini in modIniPath
+                modIniPath = entry.Value;
+            }
+        }
+
+        // Ensure mod.ini exists (it always should)
+        if (!File.Exists(modIniPath)) {
+            MessageBox.Show("Couldn't Find Mold Folder!", "Error", MessageBoxButtons.OK);
+            System.Environment.Exit(1);
+            return "";
+        }
+        
+        // Get the path to mod.ini
+        string modPath = Path.GetDirectoryName(modIniPath);
+        return modPath;
+    }
+
+    static Dictionary<string, Dictionary<string, string>> GetModINI() {   
+        // Get the path to mod.ini
+        string modPath = GetModPath();
+
+        // Get the path to our mod config INI
+        string configIniPath = Path.Combine(modPath, "config.ini");
+
+        if (!File.Exists(configIniPath)) {
+            MessageBox.Show("Couldn't Find INI File!", "Error", MessageBoxButtons.OK);
+            System.Environment.Exit(1);
+            return new Dictionary<string, Dictionary<string, string>>();
+        }
+
+        /* If you intend to store your config params in mod.ini, change configIniPath here
+        to modIniPath and remove the previous code until the File.Exists(modIniPath) condition */
+        return INI.Read(configIniPath);
+    }
+//
+{
+	if (pStatePluginBoost == 0)
+		return;
+	float* pCapacity = (float*)(pStatePluginBoost + 0x3C);
+	float* pCapacityMax = (float*)(pStatePluginBoost + 0x38);
+    var SonicParametersInfo = Reflection.GetDataInfo<SonicParameters.Root>("player_common");
+	sound.Volume = double.Parse(GetModINI()["Main"]["soundVolume"]) / 100.0;
+
+    if (SonicParametersInfo.pData == null)
+        return;
+	
+	*pCapacityMax = 400.0f;
+	if (*pCapacity <= 100.0f)
+	{
+		canBoost = false;
+	}
+	else
+	{
+		canBoost = true;
+	}
+	
+	if (!Sonic.IsGrounded() && *pCapacity > 100.0f)
+	{
+		Lua.Call("SetPlayerAbilityEnabled", "Boost", true);
+	}
+	else if (SpinBoostChargeStates.Contains(state))
+	{
+		Lua.Call("SetPlayerAbilityEnabled", "Boost", true);
+	}
+	else
+	{
+		Lua.Call("SetPlayerAbilityEnabled", "Boost", false);
+	}
+	
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.consumptionRate, 1f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.recoveryRate, 25f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.recoveryByRing, 4f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.recoveryByAttack, 6f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.infinityBoostTime, 1f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.boost.endSpeed, 200f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.startHSpeed, 35f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.minHSpeed, 35f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.startVSpeed, 5f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.startHSpeedMax, 35f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.minHSpeedMax, 35f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.maxTime, 0.05f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.maxKeepTime, 0.1f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.airboost.steeringSpeed, 25.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.decele.force, 8.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.decele.force2, 8.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.limitUpSpeed, 30.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.rotationForce, 375.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.acceleForce, 50.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.deceleForce, 80.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.deceleNeutralForce, 40.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.deceleBackForce, 15.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.jumpSpeed.rotationForceDecayRate, 0.3f);
+	
+	if (currentSpeed >= 80)
+		{
+			speed = zero;
+		}
+	
+	if (state == Sonic.StateID.StateAirBoost)
+	{
+		Sonic.State.SetState(Sonic.StateID.StateFall);
+	}
+	
+	if (Sonic.Input.IsPressed(Sonic.PlayerActionType.PlayerBoost) && canBoost && BoostStates.Contains(state))
+    {
+		var kinematics = Sonic.Kinematics.Get();
+		if (kinematics == null) 
+		{
+			return;
+		}
+		
+		if (currentSpeed >= 80)
+		{
+			speed = zero;
+		}
+		else
+		{
+			speed = defaultSpeed;
+		}
+
+		*kinematics.Velocity += Sonic.Kinematics.GetForward() * (speed + jumpSpeed);
+		
+		*pCapacity -= 100.0f;
+			
+		sound.Open(new Uri(Path.Combine(GetModPath(), GetModINI()["Main"]["soundName"])));
+		sound.Position = new TimeSpan(0);
+		sound.Play();
+			
+		Sonic.Effect.PlayEffect("burst", "ec_so_boost_impact_fv02_par01.cemt");
+		Sonic.Effect.PlayEffect("burst", "ec_so_boost_impact_fv02_plight01.cemt");
+		Sonic.Effect.PlayEffect("burst", "ec_so_boost_impact_fv02.cemt");
+		if (state != Sonic.StateID.StateAirBoost)
+		{
+			Sonic.Effect.PlayEffect("burst", "ec_so_boost_impact_fv01_distortion01.cemt");
+		}
+
+		burstParticleTimer = burstParticleTime;
+		
+		goto Reset;
+    }
+	Reset:
+		speed = 20.0f;
+        jumpSpeed = 0.0f;
+	
+	if (burstParticleTimer != -1.0f) {
+        if (burstParticleTimer > 0) {
+            burstParticleTimer -= Time.GetDeltaTime();
+        }
+        else {
+            burstParticleTimer = -1.0f;
+            Sonic.Effect.StopEffect("burst");
+        }
+    }
+}
+
+Code "Retain Ground Velocity for Jump" in "Physics" by "Hyper" does 
+/*
+Retains Sonic's ground velocity when jumping.
+
+Notes;
+- This will allow you to retain velocity when jumping out of a Drop Dash.
+- The "Jump Deceleration" and "Maintain boost during a jump" options can remain active without conflicting with this code.
+*/
+//
+    #lib "Memory"
+    #lib "Sonic"
+
+    static bool IsInitialised = false;
+    static bool IsStateJump = false;
+//
+{
+    if (!IsInitialised)
+    {
+        fixed (bool* pIsStateJump = &IsStateJump)
+        {
+            /* v1.30: 0x1408406F8 */
+            var callerFuncAddr = ScanSignature
+            (
+                "\xE8\xCC\xCC\xCC\xCC\x48\x8B\x43\x20\xBA\x20\x16\x1E\x71\x44\x0F\x28\xC0\x48\x8B\x88\x80\x00\x00\x00\xE8\xCC\xCC\xCC\xCC\x48\x8B\xC8\xE8\xCC\xCC\xCC\xCC\x48\x8B\xCB\x0F\x28\xF8\xE8\xCC\xCC\xCC\xCC\x48\x8B\xC8\xE8\xCC\xCC\xCC\xCC\x48\x8D\x55\xE7",
+                "x????xxxxxxxxxxxxxxxxxxxxx????xxxx????xxxxxxx????xxxx????xxxx"
+            );
+
+            /* v1.30: 0x14080CA10 */
+            var mainFuncAddr = Memory.ReadCall(callerFuncAddr);
+
+            // Update posture to allow retaining ground velocity.
+            WriteAsmHook
+            (
+                $@"
+                    mov   rdi, rcx
+
+                    ; Check if we're in the jump state
+                    push  r11
+                    mov   r11, {(long)pIsStateJump}
+                    mov   r11b, byte ptr [r11]
+                    cmp   r11b, 0
+                    jz    default
+                    mov   al, 1
+                    jmp   exit
+
+                default:
+                    xor   edx, edx
+                    mov   rcx, [rcx + 0x28] ; RCX = BlackboardStatus
+                    mov   eax, edx
+                    and   eax, 0x3F
+                    movzx r8d, al
+                    mov   eax, edx
+                    shr   rax, 6
+                    mov   rax, [rcx + rax * 8 + 0x30]
+                    bt    rax, r8
+                    setb  al
+
+                exit:
+                    pop   r11
+                ",
+
+                /* v1.30: 0x14080CA16 */
+                mainFuncAddr + 6,
+
+                HookBehavior.Replace
+            );
+        }
+
+        IsInitialised = true;
+    }
+
+    void NotifyStateJump(Sonic.StateID stateId, Sonic.StateID[] stateStackTrace)
+    {
+        IsStateJump = (stateId == Sonic.StateID.StateJump) || (stateId == Sonic.StateID.StateGrindJump);
+    }
+
+    Sonic.State.AddStateNotifyAction(NotifyStateJump);
+}
+
+Patch "Hide Power Boost Effects" in "Graphics" by "NM & Hyper" 
+{
+    /* Activation FX */
+    WriteNop
+    (
+        /* 0x1408D2AE5 */
+        ScanSignature
+        (
+            "\xE8\xCC\xCC\xCC\xCC\x83\x7D\x98\x00\x4C\x8D\x05\xCC\xCC\xCC\xCC\x41\xB9\x11\x00\x00\x00",
+            "x????xxxxxxx????xxxxxx"
+        ),
+
+        5
+    );
+
+    /* Boost Activation FX */
+    WriteProtected<byte>
+    (
+        /* 0x1408D1CD4 */
+        ScanSignature
+        (
+            "\x74\x09\x4C\x8D\x05\xCC\xCC\xCC\xCC\xEB\x4F\x48\x8B\xCF",
+            "xxxxx????xxxxx"
+        ),
+
+        0xEB, 0x09
+    );
+
+    /* Trail FX */
+    WriteProtected<byte>
+    (
+        /* 0x1407E931A */
+        ScanSignature
+        (
+            "\xB2\x02\xEB\x02\x32\xD2",
+            "xxxxxx"
+        ),
+
+        Assemble("mov dl, 1")
+    );
+}
+
+Code "Blank" by "jubbalub" 
+//
+    #include "ReflectionHelpers" noemit
+    #lib "Reflection"
+    #lib "SonicParameters"
+//
+{
+    var SonicParametersInfo = Reflection.GetDataInfo<SonicParameters.Root>("player_common");
+
+    if (SonicParametersInfo.pData == null)
+        return;
+		
+	RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.boost.max, 60.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.boost2.max, 60.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.boostLvMax.max, 60.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.speed.boostLvMax2.max, 60.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.grind.maxSpeed, 60.0f);
+    RFL_SET_CONTEXTUAL_PLAYER_PARAM(SonicParametersInfo, modePackage.grind.deceleForce, 20.0f);
+}
+
+Patch "Always Unlocked Spin Dash" in "Cheats" by "Hyper" 
+{
+    // Unlock various components of Spin Dash.
+    WriteAsmHook
+    (
+        $@"
+            mov al, 1
+            ret
+        ",
+
+        /* 0x140A15CD0 */
+        ScanSignature
+        (
+            "\x48\x8B\x41\x08\x8B\x40\x4C",
+            "xxxxxxx"
+        ),
+
+        HookBehavior.Replace
+    );
+
+    // Force Spin Dash bitflag check to always pass.
+    WriteAsmHook
+    (
+        $@"
+            cmp   edx, 0x3B
+            jne   exit
+            mov   al, 1
+            ret
+        exit:
+            mov   eax, edx
+            and   eax, 0x3F
+            movzx r8d, al
+            mov   eax, edx
+            shr   rax, 6
+        ",
+
+        /* 0x1407DE270 */
+        ScanSignature
+        (
+            "\x8B\xC2\x83\xE0\x3F\x44\x0F\xB6\xC0\x8B\xC2\x48\xC1\xE8\x06\x48\x8B\x44\xC1\x28",
+            "xxxxxxxxxxxxxxxxxxxx"
+        ),
+
+        HookBehavior.Replace
+    );
+}
